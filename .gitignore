@@ -7,6 +7,9 @@ src/.depend
 src/stockfish*
 src/-lstdc++.res
 
+# Dataset helper binaries
+bin/
+
 # Neural network for the NNUE evaluation
 **/*.nnue
 
