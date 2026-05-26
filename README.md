@@ -14,9 +14,9 @@ main Stockfish UCI engine executable.
 
 The supported outputs are built under `bin/`:
 
-* `mixed_bucket_fens`, for generating bucketed static-eval rows from move
-  streams or FEN-producing workflows.
-* `nnue_eval`, for evaluating FENs and exporting NNUE/static-eval components.
+* `uci_to_bucketed_eval_rows`, for replaying UCI move streams and generating
+  bucketed static-eval rows with the NNUE/static-eval components needed by the
+  dataset pipeline.
 * `pgn_to_uci_rows`, for converting PGN input into compact UCI move streams
   with minimum-Elo metadata.
 
@@ -32,16 +32,14 @@ make -j build
 The default `make`, `make build`, and `make profile-build` targets all build the
 dataset helpers only:
 
-* `../bin/mixed_bucket_fens`
-* `../bin/nnue_eval`
+* `../bin/uci_to_bucketed_eval_rows`
 * `../bin/pgn_to_uci_rows`
 
 Useful Makefile targets:
 
 * `make help`: show supported targets, compilers, and architectures.
 * `make dataset-tools`: build all helper binaries.
-* `make mixed_bucket_fens`: build only `mixed_bucket_fens`.
-* `make nnue_eval`: build only `nnue_eval`.
+* `make uci_to_bucketed_eval_rows`: build only `uci_to_bucketed_eval_rows`.
 * `make pgn_to_uci_rows`: build only `pgn_to_uci_rows`.
 * `make dataset-tools-clean`: remove helper binaries from `bin/`.
 

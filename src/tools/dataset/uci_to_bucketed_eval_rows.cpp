@@ -1,5 +1,5 @@
 /*
-  Mixed bucketed FEN dataset builder.
+  UCI move stream to bucketed eval row dataset builder.
 
   Input format (stdin or --in):
     F|uci1,uci2,...              -> include from ply 0 across all 16 buckets
@@ -11,7 +11,7 @@
     F|<start_fen>|               -> root-position-only record
 
   Output:
-    - 16 CSV files (fen,psqt,positional,nnue), one per bucket
+    - 16 CSV files (fen,psqt,positional,nnue,min_elo,source), one per bucket
     - one manifest JSON
     - one .count JSON per bucket, containing total_rows + piece_count_counts
 */
@@ -52,7 +52,6 @@
 #include "nnue/nnue_accumulator.h"
 #include "nnue/network.h"
 #include "position.h"
-#include "tools/dataset/nnue_eval_shared.h"
 #include "types.h"
 #include "uci.h"
 
@@ -64,6 +63,76 @@ constexpr std::uint64_t FnvOffsetBasis64A = 14695981039346656037ULL;
 constexpr std::uint64_t FnvPrime64        = 1099511628211ULL;
 constexpr std::size_t DedupMaxLoadPercent = 70;
 constexpr std::size_t DedupMinCapacity    = 16;
+
+enum class NnueLabelMode {
+    Adjusted,
+    Raw
+};
+
+struct EvalOptions {
+    bool          unscaledOutput = false;
+    NnueLabelMode nnueLabelMode  = NnueLabelMode::Adjusted;
+};
+
+struct EvalTriplet {
+    Stockfish::Value psqt       = Stockfish::VALUE_ZERO;
+    Stockfish::Value positional = Stockfish::VALUE_ZERO;
+    Stockfish::Value nnue       = Stockfish::VALUE_ZERO;
+};
+
+Stockfish::Value mix_nnue(Stockfish::Value psqt, Stockfish::Value positional) {
+    return Stockfish::Value((125LL * int(psqt) + 131LL * int(positional)) / 128);
+}
+
+constexpr int nnue_complexity_divisor() {
+    return 18236;
+}
+
+Stockfish::Value mix_adjusted_nnue_from_scaled(Stockfish::Value psqtScaled,
+                                               Stockfish::Value positionalScaled) {
+    int nnue = int((125LL * int(psqtScaled) + 131LL * int(positionalScaled)) / 128);
+    const int complexity = std::abs(int(psqtScaled) - int(positionalScaled));
+    nnue -= int((1LL * nnue * complexity) / nnue_complexity_divisor());
+    return Stockfish::Value(nnue);
+}
+
+std::tuple<Stockfish::Value, Stockfish::Value>
+scaled_components_for_label(const EvalOptions& opt,
+                            Stockfish::Value   psqt,
+                            Stockfish::Value   positional) {
+    using namespace Stockfish::Eval::NNUE;
+
+    if (!opt.unscaledOutput)
+        return std::make_tuple(psqt, positional);
+
+    return std::make_tuple(Stockfish::Value(int(psqt) / OutputScale),
+                           Stockfish::Value(int(positional) / OutputScale));
+}
+
+Stockfish::Value make_nnue_label(const EvalOptions& opt,
+                                 Stockfish::Value   psqt,
+                                 Stockfish::Value   positional) {
+    auto [psqtScaled, positionalScaled] = scaled_components_for_label(opt, psqt, positional);
+    if (opt.nnueLabelMode == NnueLabelMode::Raw)
+        return mix_nnue(psqtScaled, positionalScaled);
+    return mix_adjusted_nnue_from_scaled(psqtScaled, positionalScaled);
+}
+
+EvalTriplet evaluate_position(const EvalOptions&                        opt,
+                              Stockfish::Position&                      pos,
+                              Stockfish::Eval::NNUE::Networks&          networks,
+                              Stockfish::Eval::NNUE::AccumulatorCaches& caches,
+                              Stockfish::Eval::NNUE::AccumulatorStack&  accumulators) {
+    auto [psqt, positional] = networks.big.evaluate(pos, accumulators, caches.big);
+    if (opt.unscaledOutput)
+    {
+        using namespace Stockfish::Eval::NNUE;
+        psqt = Stockfish::Value((1LL * int(psqt) * OutputScale));
+        positional = Stockfish::Value((1LL * int(positional) * OutputScale));
+    }
+
+    return EvalTriplet{psqt, positional, make_nnue_label(opt, psqt, positional)};
+}
 
 class FlatHashSet64 {
   public:
@@ -176,7 +245,7 @@ struct Options {
     std::string evalFile;
     std::string bigEvalFile;
     std::string smallEvalFile;
-    nnue_eval_shared::NnueLabelMode nnueLabelMode = nnue_eval_shared::NnueLabelMode::Adjusted;
+    NnueLabelMode nnueLabelMode = NnueLabelMode::Adjusted;
     std::vector<std::string> excludeHashFiles;
     std::size_t threads            = 1;
     std::size_t batchGames         = 100;
@@ -465,7 +534,7 @@ bool parse_nonnegative_int(const std::string& text, int& value) {
 void print_usage() {
     std::cerr
       << "Usage:\n"
-      << "  mixed_bucket_fens [--in <records.txt>] --out-dir <dir> --output-stem <name>\n"
+      << "  uci_to_bucketed_eval_rows [--in <records.txt>] --out-dir <dir> --output-stem <name>\n"
       << "                    [--bucket-output-dir <dir>]\n"
       << "                    [--threads <N>] [--batch-games <N>] [--min-fens <N>]\n"
       << "                    [--min-target-display-label <label>] [--min-target-display-offset <N>]\n"
@@ -550,9 +619,9 @@ bool parse_args(int argc, char** argv, Options& opt) {
         {
             const std::string mode = argv[++i];
             if (mode == "adjusted")
-                opt.nnueLabelMode = nnue_eval_shared::NnueLabelMode::Adjusted;
+                opt.nnueLabelMode = NnueLabelMode::Adjusted;
             else if (mode == "raw")
-                opt.nnueLabelMode = nnue_eval_shared::NnueLabelMode::Raw;
+                opt.nnueLabelMode = NnueLabelMode::Raw;
             else
                 return false;
         }
@@ -769,7 +838,7 @@ int bucket_index(int pieceCount, Stockfish::Color stm);
 bool extract_nnue_fen_key(std::string_view fen, NnueFenKeyView& key);
 std::uint64_t hash_nnue_key64(const NnueFenKeyView& key, std::uint64_t seed);
 
-nnue_eval_shared::EvalOptions make_eval_options(const Options& opt);
+EvalOptions make_eval_options(const Options& opt);
 
 void append_current_position(const GameInput&                          game,
                              const Options&                            opt,
@@ -820,7 +889,7 @@ void append_current_position(const GameInput&                          game,
     }
 
     const auto evaluated =
-      nnue_eval_shared::evaluate_position(make_eval_options(opt), pos, networks, caches, accumulators);
+      evaluate_position(make_eval_options(opt), pos, networks, caches, accumulators);
 
     const auto rowBuildStartedAt = std::chrono::steady_clock::now();
     RowData row;
@@ -1081,9 +1150,8 @@ bool load_exclude_hash_files(const std::vector<std::string>& files,
     return true;
 }
 
-nnue_eval_shared::EvalOptions make_eval_options(const Options& opt) {
-    nnue_eval_shared::EvalOptions shared;
-    shared.outputNet = nnue_eval_shared::OutputNet::Big;
+EvalOptions make_eval_options(const Options& opt) {
+    EvalOptions shared;
     shared.unscaledOutput = true;
     shared.nnueLabelMode = opt.nnueLabelMode;
     return shared;

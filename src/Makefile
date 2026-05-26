@@ -72,16 +72,16 @@ HEADERS = bitboard.h evaluate.h misc.h movegen.h \
 VPATH = nnue:nnue/features
 
 DATASET_TOOLS_BIN_DIR = ../bin
-DATASET_TOOLS = $(DATASET_TOOLS_BIN_DIR)/mixed_bucket_fens \
-	$(DATASET_TOOLS_BIN_DIR)/nnue_eval \
+DATASET_TOOLS = $(DATASET_TOOLS_BIN_DIR)/uci_to_bucketed_eval_rows \
 	$(DATASET_TOOLS_BIN_DIR)/pgn_to_uci_rows
+LEGACY_DATASET_TOOLS = $(DATASET_TOOLS_BIN_DIR)/mixed_bucket_fens \
+	$(DATASET_TOOLS_BIN_DIR)/nnue_eval
 DATASET_CXXFLAGS = $(filter-out -fno-exceptions,$(CXXFLAGS)) -fexceptions -DNNUE_EMBEDDING_OFF -I. -Itools/dataset
 DATASET_LDFLAGS = $(filter-out -fno-exceptions,$(LDFLAGS)) -fexceptions
 HAVE_ZLIB = $(shell printf '#include <zlib.h>\nint main(){return 0;}\n' | $(CXX) -x c++ - -lz -o /tmp/sf18_dataset_tools_zlib_check >/dev/null 2>&1 && echo yes || echo no)
 DATASET_ZLIB_CXXFLAGS = -DHAVE_ZLIB=$(if $(filter yes,$(HAVE_ZLIB)),1,0)
 DATASET_ZLIB_LDLIBS = $(if $(filter yes,$(HAVE_ZLIB)),-lz,)
-MIXED_BUCKET_FENS_SRCS = tools/dataset/mixed_bucket_fens.cpp $(DATASET_STATIC_EVAL_SRCS)
-NNUE_EVAL_SRCS = tools/dataset/nnue_eval.cpp $(DATASET_STATIC_EVAL_SRCS)
+UCI_TO_BUCKETED_EVAL_ROWS_SRCS = tools/dataset/uci_to_bucketed_eval_rows.cpp $(DATASET_STATIC_EVAL_SRCS)
 PGN_TO_UCI_ROWS_SRCS = tools/dataset/pgn_to_uci_rows.cpp \
 	$(DATASET_BASE_SRCS)
 
@@ -878,8 +878,7 @@ help:
 	echo "help                    > Display architecture details" && \
 	echo "build                   > Build all dataset helper binaries" && \
 	echo "dataset-tools           > Build all dataset helper binaries" && \
-	echo "mixed_bucket_fens       > Build the mixed_bucket_fens helper" && \
-	echo "nnue_eval               > Build the nnue_eval helper" && \
+	echo "uci_to_bucketed_eval_rows > Build the UCI-to-bucketed-eval-rows helper" && \
 	echo "pgn_to_uci_rows         > Build the pgn_to_uci_rows helper" && \
 	echo "profile-build           > Compatibility alias for build" && \
 	echo "net                     > Download the default nnue nets" && \
@@ -949,7 +948,7 @@ endif
 
 .PHONY: help analyze build profile-build strip install clean net \
 	all \
-	dataset-tools mixed_bucket_fens nnue_eval pgn_to_uci_rows dataset-tools-clean \
+	dataset-tools uci_to_bucketed_eval_rows pgn_to_uci_rows dataset-tools-clean \
 	objclean profileclean config-sanity \
 	format analyze
 
@@ -985,26 +984,21 @@ profileclean:
 
 dataset-tools: $(DATASET_TOOLS)
 
-mixed_bucket_fens: $(DATASET_TOOLS_BIN_DIR)/mixed_bucket_fens
-
-nnue_eval: $(DATASET_TOOLS_BIN_DIR)/nnue_eval
+uci_to_bucketed_eval_rows: $(DATASET_TOOLS_BIN_DIR)/uci_to_bucketed_eval_rows
 
 pgn_to_uci_rows: $(DATASET_TOOLS_BIN_DIR)/pgn_to_uci_rows
 
 $(DATASET_TOOLS_BIN_DIR):
 	@mkdir -p $@
 
-$(DATASET_TOOLS_BIN_DIR)/mixed_bucket_fens: $(MIXED_BUCKET_FENS_SRCS) $(HEADERS) tools/dataset/nnue_eval_shared.h | $(DATASET_TOOLS_BIN_DIR)
-	+$(CXX) $(DATASET_CXXFLAGS) -o $@ $(MIXED_BUCKET_FENS_SRCS) $(DATASET_LDFLAGS)
-
-$(DATASET_TOOLS_BIN_DIR)/nnue_eval: $(NNUE_EVAL_SRCS) $(HEADERS) tools/dataset/nnue_eval_shared.h | $(DATASET_TOOLS_BIN_DIR)
-	+$(CXX) $(DATASET_CXXFLAGS) -o $@ $(NNUE_EVAL_SRCS) $(DATASET_LDFLAGS)
+$(DATASET_TOOLS_BIN_DIR)/uci_to_bucketed_eval_rows: $(UCI_TO_BUCKETED_EVAL_ROWS_SRCS) $(HEADERS) | $(DATASET_TOOLS_BIN_DIR)
+	+$(CXX) $(DATASET_CXXFLAGS) -o $@ $(UCI_TO_BUCKETED_EVAL_ROWS_SRCS) $(DATASET_LDFLAGS)
 
 $(DATASET_TOOLS_BIN_DIR)/pgn_to_uci_rows: $(PGN_TO_UCI_ROWS_SRCS) $(HEADERS) | $(DATASET_TOOLS_BIN_DIR)
 	+$(CXX) $(DATASET_CXXFLAGS) $(DATASET_ZLIB_CXXFLAGS) -o $@ $(PGN_TO_UCI_ROWS_SRCS) $(DATASET_LDFLAGS) $(DATASET_ZLIB_LDLIBS)
 
 dataset-tools-clean:
-	@rm -f $(DATASET_TOOLS)
+	@rm -f $(DATASET_TOOLS) $(LEGACY_DATASET_TOOLS)
 
 # evaluation network (nnue)
 net:
