@@ -484,5 +484,3 @@ constexpr auto is_all_same_v = is_all_same<Ts...>::value;
 }  // namespace Stockfish
 
 #endif  // #ifndef TYPES_H_INCLUDED
-
-#include "tune.h"  // Global visibility to tuning setup

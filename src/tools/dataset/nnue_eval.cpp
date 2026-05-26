@@ -43,7 +43,6 @@
 #include <vector>
 
 #include "bitboard.h"
-#include "engine.h"
 #include "evaluate.h"
 #include "misc.h"
 #include "nnue/nnue_accumulator.h"
@@ -80,9 +79,6 @@ struct Options {
     std::size_t dedupReserveCount = 0;
     bool        unscaledOutput  = false;
     nnue_eval_shared::NnueLabelMode nnueLabelMode = nnue_eval_shared::NnueLabelMode::Adjusted;
-    int         searchDepth     = 0;
-    std::size_t searchHashMb    = 16;
-    std::size_t searchThreads   = 1;
     std::size_t progressEvery   = 0;
     std::size_t flushEvery      = 1'000'000;
     std::size_t gamesTotalHint  = 0;
@@ -142,7 +138,6 @@ void print_usage() {
       << "           [--append-out] [--dedup-cache <cache.bin>]\n"
       << "           [--big <evalfile>] [--small <evalfile>]\n"
       << "           [--net <big|small>]\n"
-      << "           [--depth <N>] [--search-threads <N>] [--hash <mb>]\n"
       << "           [--from-ply <N>] [--to-ply <N>] [--max-positions <N>]\n"
       << "           [--threads <N>] [--dedup|--no-dedup]\n"
       << "           [--hash-bits <64|128>]\n"
@@ -159,9 +154,6 @@ void print_usage() {
       << "--to-ply default: 0 (no upper ply limit)\n"
       << "--dedup default: on\n"
       << "--net default: big\n"
-      << "--depth default: 0 (legacy nnue_eval behavior; >0 adds pv_* output columns)\n"
-      << "--search-threads default: 1\n"
-      << "--hash default: 16 (Stockfish hash MB used when --depth > 0)\n"
       << "--hash-bits default: 64\n"
       << "--output-scale default: scaled\n"
       << "--nnue-label default: adjusted\n"
@@ -208,16 +200,6 @@ bool parse_args(int argc, char** argv, Options& opt) {
             else
                 return false;
         }
-        else if (arg == "--depth" && i + 1 < argc)
-        {
-            opt.searchDepth = std::stoi(argv[++i]);
-            if (opt.searchDepth < 0)
-                return false;
-        }
-        else if (arg == "--search-threads" && i + 1 < argc)
-            opt.searchThreads = std::stoull(argv[++i]);
-        else if ((arg == "--hash" || arg == "--hash-mb") && i + 1 < argc)
-            opt.searchHashMb = std::stoull(argv[++i]);
         else if (arg == "--from-ply" && i + 1 < argc)
         {
             opt.fromPly = std::stoi(argv[++i]);
@@ -290,9 +272,6 @@ bool parse_args(int argc, char** argv, Options& opt) {
         return false;
 
     if (opt.toPly > 0 && opt.toPly < opt.fromPly)
-        return false;
-
-    if (opt.searchThreads == 0 || opt.searchHashMb == 0)
         return false;
 
     return true;
@@ -960,19 +939,6 @@ void write_row(std::ostream& out,
         << "\n";
 }
 
-void write_row_with_pv(std::ostream&           out,
-                       const Stockfish::Position& pos,
-                       Stockfish::Value        nnue,
-                       Stockfish::Value        psqt,
-                       Stockfish::Value        positional,
-                       Stockfish::Value        pvNnue,
-                       Stockfish::Value        pvPsqt,
-                       Stockfish::Value        pvPositional) {
-    const std::string fen = pos.fen();
-    out << "\"" << fen << "\"," << int(psqt) << "," << int(positional) << "," << int(nnue) << ","
-        << int(pvPsqt) << "," << int(pvPositional) << "," << int(pvNnue) << "\n";
-}
-
 nnue_eval_shared::EvalOptions make_eval_options(const Options& opt) {
     nnue_eval_shared::EvalOptions shared;
     shared.outputNet = opt.outputNet == Options::OutputNet::Small
@@ -980,19 +946,12 @@ nnue_eval_shared::EvalOptions make_eval_options(const Options& opt) {
                      : nnue_eval_shared::OutputNet::Big;
     shared.unscaledOutput = opt.unscaledOutput;
     shared.nnueLabelMode = opt.nnueLabelMode;
-    shared.searchDepth = opt.searchDepth;
-    shared.searchHashMb = opt.searchHashMb;
-    shared.searchThreads = opt.searchThreads;
-    shared.evaluateTerminalPv = opt.searchDepth > 0;
     return shared;
 }
 
 bool evaluate_game(int                                   gameId,
                    const GameInput&                      game,
                    const Options&                        opt,
-                   const std::string&                    enginePath,
-                   const std::string&                    bigPath,
-                   const std::string&                    smallPath,
                    Stockfish::Eval::NNUE::Networks&      networks,
                    Stockfish::Eval::NNUE::AccumulatorCaches& caches,
                    Stockfish::Eval::NNUE::AccumulatorStack&  accumulators,
@@ -1023,44 +982,13 @@ bool evaluate_game(int                                   gameId,
     positions = 0;
 
     const auto sharedOpt = make_eval_options(opt);
-    nnue_eval_shared::SearchResources searchResources;
-    if (!nnue_eval_shared::initialize_search_resources(
-          sharedOpt, enginePath, bigPath, smallPath, networks, searchResources, error))
-        return false;
-
     const bool hasToPlyLimit = opt.toPly > 0;
 
     if (opt.fromPly <= rootPly && (!hasToPlyLimit || rootPly <= opt.toPly))
     {
-        nnue_eval_shared::EvaluatedPosition evaluated;
-        if (!nnue_eval_shared::evaluate_position_with_optional_pv(
-              sharedOpt,
-              pos,
-              networks,
-              caches,
-              accumulators,
-              opt.searchDepth > 0 ? &searchResources : nullptr,
-              nullptr,
-              evaluated,
-              error))
-        {
-            error = "Evaluation failed at game " + std::to_string(gameId) + ": " + error;
-            return false;
-        }
-        if (opt.searchDepth == 0)
-            write_row(out, pos, evaluated.root.nnue, evaluated.root.psqt, evaluated.root.positional);
-        else
-        {
-            const auto& pv = evaluated.pv.value();
-            write_row_with_pv(out,
-                              pos,
-                              evaluated.root.nnue,
-                              evaluated.root.psqt,
-                              evaluated.root.positional,
-                              pv.nnue,
-                              pv.psqt,
-                              pv.positional);
-        }
+        const auto evaluated =
+          nnue_eval_shared::evaluate_position(sharedOpt, pos, networks, caches, accumulators);
+        write_row(out, pos, evaluated.nnue, evaluated.psqt, evaluated.positional);
         positions++;
     }
 
@@ -1084,8 +1012,7 @@ bool evaluate_game(int                                   gameId,
         }
 
         auto [dirtyPiece, dirtyThreats] = accumulators.push();
-        pos.do_move(m, states[i + 1], pos.gives_check(m), dirtyPiece, dirtyThreats, nullptr,
-                    nullptr);
+        pos.do_move(m, states[i + 1], pos.gives_check(m), dirtyPiece, dirtyThreats);
         accumPly++;
         currentPly++;
 
@@ -1095,36 +1022,9 @@ bool evaluate_game(int                                   gameId,
         if (currentPly < opt.fromPly)
             continue;
 
-        nnue_eval_shared::EvaluatedPosition evaluated;
-        if (!nnue_eval_shared::evaluate_position_with_optional_pv(
-              sharedOpt,
-              pos,
-              networks,
-              caches,
-              accumulators,
-              opt.searchDepth > 0 ? &searchResources : nullptr,
-              nullptr,
-              evaluated,
-              error))
-        {
-            error = "Evaluation failed at game " + std::to_string(gameId) + ", ply "
-                  + std::to_string(i + 1) + ": " + error;
-            return false;
-        }
-        if (opt.searchDepth == 0)
-            write_row(out, pos, evaluated.root.nnue, evaluated.root.psqt, evaluated.root.positional);
-        else
-        {
-            const auto& pv = evaluated.pv.value();
-            write_row_with_pv(out,
-                              pos,
-                              evaluated.root.nnue,
-                              evaluated.root.psqt,
-                              evaluated.root.positional,
-                              pv.nnue,
-                              pv.psqt,
-                              pv.positional);
-        }
+        const auto evaluated =
+          nnue_eval_shared::evaluate_position(sharedOpt, pos, networks, caches, accumulators);
+        write_row(out, pos, evaluated.nnue, evaluated.psqt, evaluated.positional);
         positions++;
     }
 
@@ -1196,10 +1096,7 @@ int main(int argc, char** argv) {
         {
             if (!headerWritten)
             {
-                if (opt.searchDepth == 0)
-                    *out << "fen,psqt,positional,nnue\n";
-                else
-                    *out << "fen,psqt,positional,nnue,pv_psqt,pv_positional,pv_nnue\n";
+                *out << "fen,psqt,positional,nnue\n";
                 headerWritten = true;
             }
             return true;
@@ -1241,12 +1138,7 @@ int main(int argc, char** argv) {
         out = &outFile;
 
         if (!opt.appendOut || !fileHasContent)
-        {
-            if (opt.searchDepth == 0)
-                *out << "fen,psqt,positional,nnue\n";
-            else
-                *out << "fen,psqt,positional,nnue,pv_psqt,pv_positional,pv_nnue\n";
-        }
+            *out << "fen,psqt,positional,nnue\n";
         else
         {
             if (!read_count_cache_file(opt.outPath, existingRowsBase))
@@ -1409,9 +1301,6 @@ int main(int argc, char** argv) {
                   if (!evaluate_game(gameId,
                                      gamesBatch[g],
                                      opt,
-                                     argc > 0 ? argv[0] : std::string(),
-                                     bigPath,
-                                     smallPath,
                                      *networks,
                                      *singleThreadCaches,
                                      *singleThreadAccumulators,
@@ -1489,9 +1378,8 @@ int main(int argc, char** argv) {
                   std::string error;
                   const int   gameId = int(gameIdBase + idx + 1);
                   bool        ok =
-                    evaluate_game(gameId, gamesBatch[idx], opt, argc > 0 ? argv[0] : std::string(),
-                                  bigPath, smallPath, *networks, *caches,
-                                  *accumulators, text, positions, error);
+                    evaluate_game(gameId, gamesBatch[idx], opt, *networks, *caches, *accumulators,
+                                  text, positions, error);
 
                   {
                       std::lock_guard<std::mutex> resultsLock(resultsMutex);

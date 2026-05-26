@@ -57,39 +57,33 @@ PREFIX = /usr/local
 BINDIR = $(PREFIX)/bin
 
 ### Source and object files
-SRCS = benchmark.cpp bitboard.cpp evaluate.cpp main.cpp \
-	misc.cpp movegen.cpp movepick.cpp position.cpp \
-	search.cpp thread.cpp timeman.cpp tt.cpp uci.cpp ucioption.cpp tune.cpp syzygy/tbprobe.cpp \
-	nnue/nnue_accumulator.cpp nnue/nnue_misc.cpp nnue/network.cpp \
-	nnue/features/half_ka_v2_hm.cpp nnue/features/full_threats.cpp \
-	engine.cpp score.cpp memory.cpp
+DATASET_BASE_SRCS = bitboard.cpp misc.cpp movegen.cpp position.cpp score.cpp uci.cpp memory.cpp
+DATASET_NNUE_SRCS = nnue/nnue_accumulator.cpp nnue/nnue_misc.cpp nnue/network.cpp \
+	nnue/features/half_ka_v2_hm.cpp nnue/features/full_threats.cpp
+DATASET_STATIC_EVAL_SRCS = $(DATASET_BASE_SRCS) $(DATASET_NNUE_SRCS)
 
-HEADERS = benchmark.h bitboard.h evaluate.h misc.h movegen.h movepick.h history.h \
+HEADERS = bitboard.h evaluate.h misc.h movegen.h \
 		nnue/nnue_misc.h nnue/features/half_ka_v2_hm.h nnue/features/full_threats.h \
 		nnue/layers/affine_transform.h nnue/layers/affine_transform_sparse_input.h \
 		nnue/layers/clipped_relu.h nnue/layers/sqr_clipped_relu.h nnue/nnue_accumulator.h \
 		nnue/nnue_architecture.h nnue/nnue_common.h nnue/nnue_feature_transformer.h nnue/simd.h \
-		position.h search.h syzygy/tbprobe.h thread.h thread_win32_osx.h timeman.h \
-		tt.h tune.h types.h uci.h ucioption.h perft.h nnue/network.h engine.h score.h numa.h memory.h
+		position.h types.h uci.h nnue/network.h score.h memory.h
 
-OBJS = $(notdir $(SRCS:.cpp=.o))
-
-VPATH = syzygy:nnue:nnue/features
+VPATH = nnue:nnue/features
 
 DATASET_TOOLS_BIN_DIR = ../bin
 DATASET_TOOLS = $(DATASET_TOOLS_BIN_DIR)/mixed_bucket_fens \
 	$(DATASET_TOOLS_BIN_DIR)/nnue_eval \
 	$(DATASET_TOOLS_BIN_DIR)/pgn_to_uci_rows
-DATASET_ENGINE_SRCS = $(filter-out main.cpp,$(SRCS))
 DATASET_CXXFLAGS = $(filter-out -fno-exceptions,$(CXXFLAGS)) -fexceptions -DNNUE_EMBEDDING_OFF -I. -Itools/dataset
 DATASET_LDFLAGS = $(filter-out -fno-exceptions,$(LDFLAGS)) -fexceptions
 HAVE_ZLIB = $(shell printf '#include <zlib.h>\nint main(){return 0;}\n' | $(CXX) -x c++ - -lz -o /tmp/sf18_dataset_tools_zlib_check >/dev/null 2>&1 && echo yes || echo no)
 DATASET_ZLIB_CXXFLAGS = -DHAVE_ZLIB=$(if $(filter yes,$(HAVE_ZLIB)),1,0)
 DATASET_ZLIB_LDLIBS = $(if $(filter yes,$(HAVE_ZLIB)),-lz,)
-MIXED_BUCKET_FENS_SRCS = tools/dataset/mixed_bucket_fens.cpp $(DATASET_ENGINE_SRCS)
-NNUE_EVAL_SRCS = tools/dataset/nnue_eval.cpp $(DATASET_ENGINE_SRCS)
+MIXED_BUCKET_FENS_SRCS = tools/dataset/mixed_bucket_fens.cpp $(DATASET_STATIC_EVAL_SRCS)
+NNUE_EVAL_SRCS = tools/dataset/nnue_eval.cpp $(DATASET_STATIC_EVAL_SRCS)
 PGN_TO_UCI_ROWS_SRCS = tools/dataset/pgn_to_uci_rows.cpp \
-	bitboard.cpp misc.cpp movegen.cpp position.cpp score.cpp uci.cpp tune.cpp
+	$(DATASET_BASE_SRCS)
 
 ### ==========================================================================
 ### Section 2. High-level Configuration
@@ -980,16 +974,13 @@ clean: objclean profileclean dataset-tools-clean
 
 # clean binaries and objects
 objclean:
-	@rm -f stockfish stockfish.exe *.o ./syzygy/*.o ./nnue/*.o ./nnue/features/*.o
+	@rm -f *.o ./nnue/*.o ./nnue/features/*.o
 
 # clean auxiliary profiling files
 profileclean:
 	@rm -rf profdir
-	@rm -f bench.txt *.gcda *.gcno ./syzygy/*.gcda ./nnue/*.gcda ./nnue/features/*.gcda *.s PGOBENCH.out
-	@rm -f stockfish.profdata *.profraw
-	@rm -f stockfish.*args*
-	@rm -f stockfish.*lt*
-	@rm -f stockfish.res
+	@rm -f bench.txt *.gcda *.gcno ./nnue/*.gcda ./nnue/features/*.gcda *.s
+	@rm -f *.profraw
 	@rm -f ./-lstdc++.res
 
 dataset-tools: $(DATASET_TOOLS)
@@ -1020,7 +1011,7 @@ net:
 	@$(SHELL) ../scripts/net.sh
 
 format:
-	$(CLANG-FORMAT) -i $(SRCS) $(HEADERS) -style=file
+	$(CLANG-FORMAT) -i $(DATASET_STATIC_EVAL_SRCS) tools/dataset/*.cpp tools/dataset/*.h $(HEADERS) -style=file
 
 ### ==========================================================================
 ### Section 5. Private Targets

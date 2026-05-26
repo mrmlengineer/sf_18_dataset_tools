@@ -47,7 +47,6 @@
 #include <vector>
 
 #include "bitboard.h"
-#include "engine.h"
 #include "evaluate.h"
 #include "misc.h"
 #include "nnue/nnue_accumulator.h"
@@ -820,30 +819,16 @@ void append_current_position(const GameInput&                          game,
           std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - dedupStartedAt).count());
     }
 
-    nnue_eval_shared::EvaluatedPosition evaluated;
-    std::string evalError;
-    if (!nnue_eval_shared::evaluate_position_with_optional_pv(
-          make_eval_options(opt),
-          pos,
-          networks,
-          caches,
-          accumulators,
-          nullptr,
-          nullptr,
-          evaluated,
-          evalError))
-    {
-        result.fatalError = evalError;
-        return;
-    }
+    const auto evaluated =
+      nnue_eval_shared::evaluate_position(make_eval_options(opt), pos, networks, caches, accumulators);
 
     const auto rowBuildStartedAt = std::chrono::steady_clock::now();
     RowData row;
     row.fen = std::move(fen);
     row.pieceCount = pieceCount;
-    row.psqt = evaluated.root.psqt;
-    row.positional = evaluated.root.positional;
-    row.nnue = evaluated.root.nnue;
+    row.psqt = evaluated.psqt;
+    row.positional = evaluated.positional;
+    row.nnue = evaluated.nnue;
     row.minElo = game.minElo;
     row.source = game.source;
     result.rowsByBucket[static_cast<std::size_t>(bucket)].push_back(std::move(row));
@@ -1155,8 +1140,7 @@ GameProcessResult process_game(const GameInput& game,
         }
 
         auto [dirtyPiece, dirtyThreats] = accumulators.push();
-        pos.do_move(m, states[i + 1], pos.gives_check(m), dirtyPiece, dirtyThreats, nullptr,
-                    nullptr);
+        pos.do_move(m, states[i + 1], pos.gives_check(m), dirtyPiece, dirtyThreats);
         accumPly++;
         currentPly++;
         result.moveApplyUs += static_cast<std::uint64_t>(

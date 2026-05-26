@@ -32,11 +32,8 @@
 #include <utility>
 
 #include "bitboard.h"
-#include "history.h"
 #include "misc.h"
 #include "movegen.h"
-#include "syzygy/tbprobe.h"
-#include "tt.h"
 #include "uci.h"
 
 using std::string;
@@ -83,19 +80,6 @@ std::ostream& operator<<(std::ostream& os, const Position& pos) {
 
     for (Bitboard b = pos.checkers(); b;)
         os << UCIEngine::square(pop_lsb(b)) << " ";
-
-    if (Tablebases::MaxCardinality >= popcount(pos.pieces()) && !pos.can_castle(ANY_CASTLING))
-    {
-        StateInfo st;
-
-        Position p;
-        p.set(pos.fen(), pos.is_chess960(), &st);
-        Tablebases::ProbeState s1, s2;
-        Tablebases::WDLScore   wdl = Tablebases::probe_wdl(p, &s1);
-        int                    dtz = Tablebases::probe_dtz(p, &s2);
-        os << "\nTablebases WDL: " << std::setw(4) << wdl << " (" << s1 << ")"
-           << "\nTablebases DTZ: " << std::setw(4) << dtz << " (" << s2 << ")";
-    }
 
     return os;
 }
@@ -702,9 +686,7 @@ void Position::do_move(Move                      m,
                        StateInfo&                newSt,
                        bool                      givesCheck,
                        DirtyPiece&               dp,
-                       DirtyThreats&             dts,
-                       const TranspositionTable* tt      = nullptr,
-                       const SharedHistories*    history = nullptr) {
+                       DirtyThreats&             dts) {
 
     assert(m.is_ok());
     assert(&newSt != st);
@@ -883,19 +865,6 @@ void Position::do_move(Move                      m,
             st->minorPieceKey ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
     }
 
-    // If en passant is impossible, then k will not change and we can prefetch earlier
-    if (tt && !checkEP)
-        prefetch(tt->first_entry(adjust_key50(k)));
-
-    if (history)
-    {
-        prefetch(&history->pawn_entry(*this)[pc][to]);
-        prefetch(&history->pawn_correction_entry(*this));
-        prefetch(&history->minor_piece_correction_entry(*this));
-        prefetch(&history->nonpawn_correction_entry<WHITE>(*this));
-        prefetch(&history->nonpawn_correction_entry<BLACK>(*this));
-    }
-
     // Set capture piece
     st->capturedPiece = captured;
 
@@ -961,8 +930,6 @@ void Position::do_move(Move                      m,
 
     // Update the key with the final value
     st->key = k;
-    if (tt)
-        prefetch(tt->first_entry(key()));
 
     // Calculate the repetition info. It is the ply distance from the previous
     // occurrence of the same position, negative in the 3-fold case, or zero
@@ -1243,49 +1210,6 @@ void Position::do_castling(Color               us,
     remove_piece(Do ? rfrom : rto, dts);
     put_piece(make_piece(us, KING), Do ? to : from, dts);
     put_piece(make_piece(us, ROOK), Do ? rto : rfrom, dts);
-}
-
-
-// Used to do a "null move": it flips
-// the side to move without executing any move on the board.
-void Position::do_null_move(StateInfo& newSt, const TranspositionTable& tt) {
-
-    assert(!checkers());
-    assert(&newSt != st);
-
-    std::memcpy(&newSt, st, sizeof(StateInfo));
-
-    newSt.previous = st;
-    st             = &newSt;
-
-    if (st->epSquare != SQ_NONE)
-    {
-        st->key ^= Zobrist::enpassant[file_of(st->epSquare)];
-        st->epSquare = SQ_NONE;
-    }
-
-    st->key ^= Zobrist::side;
-    prefetch(tt.first_entry(key()));
-
-    st->pliesFromNull = 0;
-
-    sideToMove = ~sideToMove;
-
-    set_check_info();
-
-    st->repetition = 0;
-
-    assert(pos_is_ok());
-}
-
-
-// Must be used to undo a "null move"
-void Position::undo_null_move() {
-
-    assert(!checkers());
-
-    st         = st->previous;
-    sideToMove = ~sideToMove;
 }
 
 

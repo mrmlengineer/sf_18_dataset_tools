@@ -2,11 +2,11 @@
 
 `sf_18_dataset_tools` is a fork of [Stockfish][stockfish-website] based on the
 official `sf_18` release/tag. The fork exists to build dataset-generation helper
-binaries around Stockfish's board representation, move generation, search, and
+binaries around Stockfish's board representation, move generation, and
 NNUE/static-evaluation code.
 
 This repository is not the official Stockfish project. It keeps the Stockfish
-engine code needed by the helpers, but its supported build workflow is limited
+code needed by the helpers, but its supported build workflow is limited
 to dataset helper binaries. It does not support building or distributing the
 main Stockfish UCI engine executable.
 
