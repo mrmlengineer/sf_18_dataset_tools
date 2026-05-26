@@ -47,7 +47,16 @@ class Engine {
     using InfoFull  = Search::InfoFull;
     using InfoIter  = Search::InfoIteration;
 
+    struct StartupOptions {
+        size_t      threads       = 1;
+        size_t      hashMb        = 16;
+        int         multiPV       = 1;
+        std::string evalFile;
+        std::string evalFileSmall;
+    };
+
     Engine(std::optional<std::string> path = std::nullopt);
+    Engine(std::optional<std::string> path, StartupOptions startupOptions);
 
     // Cannot be movable due to components holding backreferences to fields
     Engine(const Engine&)            = delete;
@@ -99,6 +108,8 @@ class Engine {
     OptionsMap&       get_options();
 
     int get_hashfull(int maxAge = 0) const;
+    std::vector<Move> get_last_pv_moves() const;
+    Value             get_last_root_score() const;
 
     std::string                            fen() const;
     void                                   flip();
@@ -125,6 +136,7 @@ class Engine {
     Search::SearchManager::UpdateContext  updateContext;
     std::function<void(std::string_view)> onVerifyNetworks;
     std::map<NumaIndex, SharedHistories>  sharedHists;
+    mutable bool                          networksVerified = false;
 };
 
 }  // namespace Stockfish

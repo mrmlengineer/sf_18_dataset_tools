@@ -59,6 +59,9 @@ int            MaxThreads = std::max(1024, 4 * int(get_hardware_concurrency()));
 constexpr NumaAutoPolicy DefaultNumaPolicy = BundledL3Policy{32};
 
 Engine::Engine(std::optional<std::string> path) :
+    Engine(std::move(path), StartupOptions{}) {}
+
+Engine::Engine(std::optional<std::string> path, StartupOptions startupOptions) :
     binaryDirectory(path ? CommandLine::get_binary_directory(*path) : ""),
     numaContext(NumaConfig::from_system(DefaultNumaPolicy)),
     states(new std::deque<StateInfo>(1)),
@@ -67,6 +70,11 @@ Engine::Engine(std::optional<std::string> path) :
              // Heap-allocate because sizeof(NN::Networks) is large
              std::make_unique<NN::Networks>(NN::EvalFile{EvalFileDefaultNameBig, "None", ""},
                                             NN::EvalFile{EvalFileDefaultNameSmall, "None", ""})) {
+
+    if (startupOptions.evalFile.empty())
+        startupOptions.evalFile = EvalFileDefaultNameBig;
+    if (startupOptions.evalFileSmall.empty())
+        startupOptions.evalFileSmall = EvalFileDefaultNameSmall;
 
     pos.set(StartFEN, false, &states->back());
 
@@ -84,13 +92,13 @@ Engine::Engine(std::optional<std::string> path) :
       }));
 
     options.add(  //
-      "Threads", Option(1, 1, MaxThreads, [this](const Option&) {
+      "Threads", Option(int(startupOptions.threads), 1, MaxThreads, [this](const Option&) {
           resize_threads();
           return thread_allocation_information_as_string();
       }));
 
     options.add(  //
-      "Hash", Option(16, 1, MaxHashMB, [this](const Option& o) {
+      "Hash", Option(int(startupOptions.hashMb), 1, MaxHashMB, [this](const Option& o) {
           set_tt_size(o);
           return std::nullopt;
       }));
@@ -105,7 +113,7 @@ Engine::Engine(std::optional<std::string> path) :
       "Ponder", Option(false));
 
     options.add(  //
-      "MultiPV", Option(1, 1, MAX_MOVES));
+      "MultiPV", Option(startupOptions.multiPV, 1, MAX_MOVES));
 
     options.add("Skill Level", Option(20, 0, 20));
 
@@ -136,13 +144,13 @@ Engine::Engine(std::optional<std::string> path) :
     options.add("SyzygyProbeLimit", Option(7, 0, 7));
 
     options.add(  //
-      "EvalFile", Option(EvalFileDefaultNameBig, [this](const Option& o) {
+      "EvalFile", Option(startupOptions.evalFile.c_str(), [this](const Option& o) {
           load_big_network(o);
           return std::nullopt;
       }));
 
     options.add(  //
-      "EvalFileSmall", Option(EvalFileDefaultNameSmall, [this](const Option& o) {
+      "EvalFileSmall", Option(startupOptions.evalFileSmall.c_str(), [this](const Option& o) {
           load_small_network(o);
           return std::nullopt;
       }));
@@ -193,6 +201,7 @@ void Engine::set_on_bestmove(std::function<void(std::string_view, std::string_vi
 
 void Engine::set_on_verify_networks(std::function<void(std::string_view)>&& f) {
     onVerifyNetworks = std::move(f);
+    networksVerified = false;
 }
 
 void Engine::wait_for_search_finished() { threads.main_thread()->wait_for_search_finished(); }
@@ -248,6 +257,7 @@ void Engine::resize_threads() {
     // Reallocate the hash with the new threadpool size
     set_tt_size(options["Hash"]);
     threads.ensure_network_replicated();
+    networksVerified = false;
 }
 
 void Engine::set_tt_size(size_t mb) {
@@ -260,6 +270,9 @@ void Engine::set_ponderhit(bool b) { threads.main_manager()->ponder = b; }
 // network related
 
 void Engine::verify_networks() const {
+    if (networksVerified)
+        return;
+
     networks->big.verify(options["EvalFile"], onVerifyNetworks);
     networks->small.verify(options["EvalFileSmall"], onVerifyNetworks);
 
@@ -292,6 +305,8 @@ void Engine::verify_networks() const {
 
         onVerifyNetworks(message);
     }
+
+    networksVerified = true;
 }
 
 void Engine::load_networks() {
@@ -301,6 +316,7 @@ void Engine::load_networks() {
     });
     threads.clear();
     threads.ensure_network_replicated();
+    networksVerified = false;
 }
 
 void Engine::load_big_network(const std::string& file) {
@@ -308,6 +324,7 @@ void Engine::load_big_network(const std::string& file) {
       [this, &file](NN::Networks& networks_) { networks_.big.load(binaryDirectory, file); });
     threads.clear();
     threads.ensure_network_replicated();
+    networksVerified = false;
 }
 
 void Engine::load_small_network(const std::string& file) {
@@ -315,6 +332,7 @@ void Engine::load_small_network(const std::string& file) {
       [this, &file](NN::Networks& networks_) { networks_.small.load(binaryDirectory, file); });
     threads.clear();
     threads.ensure_network_replicated();
+    networksVerified = false;
 }
 
 void Engine::save_network(const std::pair<std::optional<std::string>, std::string> files[2]) {
@@ -350,6 +368,29 @@ std::string Engine::visualize() const {
 }
 
 int Engine::get_hashfull(int maxAge) const { return tt.hashfull(maxAge); }
+
+std::vector<Move> Engine::get_last_pv_moves() const {
+    threads.wait_for_search_finished();
+    if (threads.empty())
+        return {};
+
+    const Thread* best = threads.get_best_thread();
+    if (!best || !best->worker)
+        return {};
+    return best->worker->current_root_pv();
+}
+
+Value Engine::get_last_root_score() const {
+    threads.wait_for_search_finished();
+    if (threads.empty())
+        return VALUE_NONE;
+
+    const Thread* best = threads.get_best_thread();
+    if (!best || !best->worker)
+        return VALUE_NONE;
+
+    return best->worker->current_root_score();
+}
 
 std::vector<std::pair<size_t, size_t>> Engine::get_bound_thread_count_by_numa_node() const {
     auto                                   counts = threads.get_bound_thread_count_by_numa_node();

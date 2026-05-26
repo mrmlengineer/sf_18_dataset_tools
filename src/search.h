@@ -283,6 +283,12 @@ class Worker {
     void start_searching();
 
     bool is_mainthread() const { return threadIdx == 0; }
+    std::vector<Move> current_root_pv() const {
+        return rootMoves.empty() ? std::vector<Move>{} : rootMoves[0].pv;
+    }
+    Value current_root_score() const {
+        return rootMoves.empty() ? VALUE_NONE : rootMoves[0].score;
+    }
 
     void ensure_network_replicated();
 

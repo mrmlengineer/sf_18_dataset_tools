@@ -45,7 +45,7 @@ Planned dataset helper binaries include:
 
   * `nnue_eval`, for evaluating FENs and exporting NNUE/static-eval components.
 
-  * `pgn_to_uci_min_elo`, for converting PGN input into compact UCI move
+  * `pgn_to_uci_rows`, for converting PGN input into compact UCI move
     streams with minimum-Elo metadata.
 
 [Stockfish][website-link] is a **free and strong UCI chess engine** derived from
