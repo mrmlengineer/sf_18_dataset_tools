@@ -2,9 +2,9 @@
 
   [![Stockfish][stockfish128-logo]][website-link]
 
-  <h3>Stockfish</h3>
+  <h3>SF18 Dataset Tools</h3>
 
-  A free and strong UCI chess engine.
+  Stockfish 18 fork with dataset-generation tools focused on static evaluation.
   <br>
   <strong>[Explore Stockfish docs »][wiki-link]</strong>
   <br>
@@ -30,6 +30,23 @@
 </div>
 
 ## Overview
+
+This repository is a fork of official Stockfish at the `sf_18` tag. It adds
+tools for generating chess datasets, with static evaluation as the main focus.
+
+The dataset tooling is intended to extract NNUE-related labels, produce
+Stockfish static-eval targets, and prepare data for downstream training
+pipelines.
+
+Planned dataset helper binaries include:
+
+  * `mixed_bucket_fens`, for generating bucketed static-eval rows from move
+    streams or FEN-producing workflows.
+
+  * `nnue_eval`, for evaluating FENs and exporting NNUE/static-eval components.
+
+  * `pgn_to_uci_min_elo`, for converting PGN input into compact UCI move
+    streams with minimum-Elo metadata.
 
 [Stockfish][website-link] is a **free and strong UCI chess engine** derived from
 Glaurung 2.1 that analyzes chess positions and computes the optimal moves.
