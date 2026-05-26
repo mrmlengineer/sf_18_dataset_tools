@@ -52,19 +52,9 @@ else ifeq ($(COMP),mingw)
 	endif
 endif
 
-### Executable name
-ifeq ($(target_windows),yes)
-	EXE = stockfish.exe
-else
-	EXE = stockfish
-endif
-
 ### Installation dir definitions
 PREFIX = /usr/local
 BINDIR = $(PREFIX)/bin
-
-### Built-in benchmark for pgo-builds
-PGOBENCH = $(RUN_PREFIX) ./$(EXE) bench
 
 ### Source and object files
 SRCS = benchmark.cpp bitboard.cpp evaluate.cpp main.cpp \
@@ -87,6 +77,9 @@ OBJS = $(notdir $(SRCS:.cpp=.o))
 VPATH = syzygy:nnue:nnue/features
 
 DATASET_TOOLS_BIN_DIR = ../bin
+DATASET_TOOLS = $(DATASET_TOOLS_BIN_DIR)/mixed_bucket_fens \
+	$(DATASET_TOOLS_BIN_DIR)/nnue_eval \
+	$(DATASET_TOOLS_BIN_DIR)/pgn_to_uci_rows
 DATASET_ENGINE_SRCS = $(filter-out main.cpp,$(SRCS))
 DATASET_CXXFLAGS = $(filter-out -fno-exceptions,$(CXXFLAGS)) -fexceptions -DNNUE_EMBEDDING_OFF -I. -Itools/dataset
 DATASET_LDFLAGS = $(filter-out -fno-exceptions,$(LDFLAGS)) -fexceptions
@@ -600,41 +593,11 @@ ifdef COMPCXX
 	CXX=$(COMPCXX)
 endif
 
-# llvm-profdata must be version compatible with the specified CXX (be it clang, or the gcc alias)
-# make -j profile-build CXX=clang++-20 COMP=clang
-# Locate the version in the same directory as the compiler used,
-# with fallback to a generic one if it can't be located
-	LLVM_PROFDATA := $(dir $(realpath $(shell which $(CXX) 2> /dev/null)))llvm-profdata
-# for icx
-ifeq ($(wildcard $(LLVM_PROFDATA)),)
-	LLVM_PROFDATA := $(dir $(realpath $(shell which $(CXX) 2> /dev/null)))/compiler/llvm-profdata
-endif
-ifeq ($(wildcard $(LLVM_PROFDATA)),)
-	LLVM_PROFDATA := llvm-profdata
-endif
-
-ifeq ($(comp),icx)
-	profile_make = icx-profile-make
-	profile_use = icx-profile-use
-else ifeq ($(comp),clang)
-	profile_make = clang-profile-make
-	profile_use = clang-profile-use
-else
-	profile_make = gcc-profile-make
-	profile_use = gcc-profile-use
-	ifeq ($(KERNEL),Darwin)
-		EXTRAPROFILEFLAGS = -fvisibility=hidden
-	endif
-endif
-
 ### Sometimes gcc is really clang
 ifeq ($(COMP),gcc)
 	gccversion := $(shell $(CXX) --version 2>/dev/null)
 	gccisclang := $(findstring clang,$(gccversion))
-	ifneq ($(gccisclang),)
-		profile_make = clang-profile-make
-		profile_use = clang-profile-use
-	else
+	ifeq ($(gccisclang),)
 		CXXFLAGS += -Wstack-usage=128000
 	endif
 endif
@@ -908,20 +871,26 @@ endif
 ### Section 4. Public Targets
 ### ==========================================================================
 
+.DEFAULT_GOAL := build
+
 help:
 	@echo "" && \
-	echo "To compile stockfish, type: " && \
+	echo "To compile the dataset helper binaries, type: " && \
 	echo "" && \
 	echo "make -j target [ARCH=arch] [COMP=compiler] [COMPCXX=cxx]" && \
 	echo "" && \
 	echo "Supported targets:" && \
 	echo "" && \
 	echo "help                    > Display architecture details" && \
-	echo "profile-build           > standard build with profile-guided optimization" && \
-	echo "build                   > skip profile-guided optimization" && \
+	echo "build                   > Build all dataset helper binaries" && \
+	echo "dataset-tools           > Build all dataset helper binaries" && \
+	echo "mixed_bucket_fens       > Build the mixed_bucket_fens helper" && \
+	echo "nnue_eval               > Build the nnue_eval helper" && \
+	echo "pgn_to_uci_rows         > Build the pgn_to_uci_rows helper" && \
+	echo "profile-build           > Compatibility alias for build" && \
 	echo "net                     > Download the default nnue nets" && \
-	echo "strip                   > Strip executable" && \
-	echo "install                 > Install executable" && \
+	echo "strip                   > Strip dataset helper binaries" && \
+	echo "install                 > Install dataset helper binaries" && \
 	echo "clean                   > Clean up" && \
 	echo "" && \
 	echo "Supported archs:" && \
@@ -968,14 +937,14 @@ help:
 	echo "" && \
 	echo "Simple examples. If you don't know what to do, you likely want to run one of: " && \
 	echo "" && \
-	echo "make -j profile-build ARCH=x86-64-avx2    # typically a fast compile for common systems " && \
-	echo "make -j profile-build ARCH=x86-64-sse41-popcnt  # A more portable compile for 64-bit systems " && \
-	echo "make -j profile-build ARCH=x86-64         # A portable compile for 64-bit systems " && \
+	echo "make -j build ARCH=x86-64-avx2    # typically a fast compile for common systems " && \
+	echo "make -j build ARCH=x86-64-sse41-popcnt  # A more portable compile for 64-bit systems " && \
+	echo "make -j build ARCH=x86-64         # A portable compile for 64-bit systems " && \
 	echo "" && \
 	echo "Advanced examples, for experienced users: " && \
 	echo "" && \
-	echo "make -j profile-build ARCH=x86-64-avxvnni" && \
-	echo "make -j profile-build ARCH=x86-64-avxvnni COMP=gcc COMPCXX=g++-12.0" && \
+	echo "make -j build ARCH=x86-64-avxvnni" && \
+	echo "make -j build ARCH=x86-64-avxvnni COMP=gcc COMPCXX=g++-12.0" && \
 	echo "make -j build ARCH=x86-64-ssse3 COMP=clang" && \
 	echo ""
 ifneq ($(SUPPORTED_ARCH), true)
@@ -985,45 +954,28 @@ endif
 
 
 .PHONY: help analyze build profile-build strip install clean net \
+	all \
 	dataset-tools mixed_bucket_fens nnue_eval pgn_to_uci_rows dataset-tools-clean \
 	objclean profileclean config-sanity \
-	icx-profile-use icx-profile-make \
-	gcc-profile-use gcc-profile-make \
-	clang-profile-use clang-profile-make FORCE \
 	format analyze
 
-analyze: net config-sanity objclean
-	$(MAKE) -k ARCH=$(ARCH) COMP=$(COMP) $(OBJS)
+analyze: config-sanity
+	$(MAKE) -k ARCH=$(ARCH) COMP=$(COMP) dataset-tools
 
-build: net config-sanity
-	$(MAKE) ARCH=$(ARCH) COMP=$(COMP) all
+build: dataset-tools
 
-profile-build: net config-sanity objclean profileclean
-	@echo ""
-	@echo "Step 1/4. Building instrumented executable ..."
-	$(MAKE) ARCH=$(ARCH) COMP=$(COMP) $(profile_make)
-	@echo ""
-	@echo "Step 2/4. Running benchmark for pgo-build ..."
-	$(PGOBENCH) > PGOBENCH.out 2>&1
-	tail -n 4 PGOBENCH.out
-	@echo ""
-	@echo "Step 3/4. Building optimized executable ..."
-	$(MAKE) ARCH=$(ARCH) COMP=$(COMP) objclean
-	$(MAKE) ARCH=$(ARCH) COMP=$(COMP) $(profile_use)
-	@echo ""
-	@echo "Step 4/4. Deleting profile data ..."
-	$(MAKE) ARCH=$(ARCH) COMP=$(COMP) profileclean
+profile-build: build
 
-strip:
-	$(STRIP) $(EXE)
+strip: dataset-tools
+	$(STRIP) $(DATASET_TOOLS)
 
-install:
+install: dataset-tools
 	-mkdir -p -m 755 $(BINDIR)
-	-cp $(EXE) $(BINDIR)
-	$(STRIP) $(BINDIR)/$(EXE)
+	-cp $(DATASET_TOOLS) $(BINDIR)
+	$(STRIP) $(addprefix $(BINDIR)/,$(notdir $(DATASET_TOOLS)))
 
 # clean all
-clean: objclean profileclean
+clean: objclean profileclean dataset-tools-clean
 	@rm -f .depend *~ core
 
 # clean binaries and objects
@@ -1040,7 +992,7 @@ profileclean:
 	@rm -f stockfish.res
 	@rm -f ./-lstdc++.res
 
-dataset-tools: mixed_bucket_fens nnue_eval pgn_to_uci_rows
+dataset-tools: $(DATASET_TOOLS)
 
 mixed_bucket_fens: $(DATASET_TOOLS_BIN_DIR)/mixed_bucket_fens
 
@@ -1061,9 +1013,7 @@ $(DATASET_TOOLS_BIN_DIR)/pgn_to_uci_rows: $(PGN_TO_UCI_ROWS_SRCS) $(HEADERS) | $
 	+$(CXX) $(DATASET_CXXFLAGS) $(DATASET_ZLIB_CXXFLAGS) -o $@ $(PGN_TO_UCI_ROWS_SRCS) $(DATASET_LDFLAGS) $(DATASET_ZLIB_LDLIBS)
 
 dataset-tools-clean:
-	@rm -f $(DATASET_TOOLS_BIN_DIR)/mixed_bucket_fens \
-		$(DATASET_TOOLS_BIN_DIR)/nnue_eval \
-		$(DATASET_TOOLS_BIN_DIR)/pgn_to_uci_rows
+	@rm -f $(DATASET_TOOLS)
 
 # evaluation network (nnue)
 net:
@@ -1076,9 +1026,9 @@ format:
 ### Section 5. Private Targets
 ### ==========================================================================
 
-all: $(EXE) .depend
+all: dataset-tools
 
-config-sanity: net
+config-sanity:
 	@echo ""
 	@echo "Config:" && \
 	echo "debug: '$(debug)'" && \
@@ -1145,58 +1095,3 @@ config-sanity: net
 	(test "$(comp)" = "gcc" || test "$(comp)" = "icx" || test "$(comp)" = "mingw" || \
 	 test "$(comp)" = "clang" || test "$(comp)" = "armv7a-linux-androideabi16-clang" || \
 	 test "$(comp)" = "aarch64-linux-android21-clang")
-
-$(EXE): $(OBJS)
-	+$(CXX) -o $@ $(OBJS) $(LDFLAGS)
-
-# Force recompilation to ensure version info is up-to-date
-misc.o: FORCE
-FORCE:
-
-clang-profile-make:
-	$(MAKE) ARCH=$(ARCH) COMP=$(COMP) \
-	EXTRACXXFLAGS='-fprofile-generate ' \
-	EXTRALDFLAGS=' -fprofile-generate' \
-	all
-
-clang-profile-use:
-	$(XCRUN) $(LLVM_PROFDATA) merge -output=stockfish.profdata *.profraw
-	$(MAKE) ARCH=$(ARCH) COMP=$(COMP) \
-	EXTRACXXFLAGS='-fprofile-use=stockfish.profdata' \
-	EXTRALDFLAGS='-fprofile-use ' \
-	all
-
-gcc-profile-make:
-	@mkdir -p profdir
-	$(MAKE) ARCH=$(ARCH) COMP=$(COMP) \
-	EXTRACXXFLAGS='-fprofile-generate=profdir' \
-	EXTRACXXFLAGS+=$(EXTRAPROFILEFLAGS) \
-	EXTRALDFLAGS='-lgcov' \
-	all
-
-gcc-profile-use:
-	$(MAKE) ARCH=$(ARCH) COMP=$(COMP) \
-	EXTRACXXFLAGS='-fprofile-use=profdir -fno-peel-loops -fno-tracer' \
-	EXTRACXXFLAGS+=$(EXTRAPROFILEFLAGS) \
-	EXTRALDFLAGS='-lgcov' \
-	all
-
-icx-profile-make:
-	$(MAKE) ARCH=$(ARCH) COMP=$(COMP) \
-	EXTRACXXFLAGS='-fprofile-instr-generate ' \
-	EXTRALDFLAGS=' -fprofile-instr-generate' \
-	all
-
-icx-profile-use:
-	$(XCRUN) $(LLVM_PROFDATA) merge -output=stockfish.profdata *.profraw
-	$(MAKE) ARCH=$(ARCH) COMP=$(COMP) \
-	EXTRACXXFLAGS='-fprofile-instr-use=stockfish.profdata' \
-	EXTRALDFLAGS='-fprofile-use ' \
-	all
-
-.depend: $(SRCS)
-	-@$(CXX) $(DEPENDFLAGS) -MM $(SRCS) > $@ 2> /dev/null
-
-ifeq (, $(filter $(MAKECMDGOALS), help strip install clean net objclean profileclean format config-sanity))
--include .depend
-endif
